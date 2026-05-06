@@ -1,0 +1,186 @@
+name: Website Saver
+
+on:
+  workflow_dispatch:
+    inputs:
+      website_url:
+        description: 'Website URL or File URL'
+        required: true
+        type: string
+      
+      save_mode:
+        description: 'Save mode'
+        required: true
+        type: choice
+        options:
+          - single-page
+          - whole-website
+          - file-download
+        default: single-page
+      
+      output_name:
+        description: 'Output name (optional)'
+        required: false
+        type: string
+        default: ''
+      
+      split_size_mb:
+        description: 'Split size in MB (0 = no split)'
+        required: false
+        type: number
+        default: 0
+
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget rar
+      
+      - name: Save Website or Download File
+        run: |
+          #!/bin/bash
+          
+          WEBSITE_URL="${{ inputs.website_url }}"
+          SAVE_MODE="${{ inputs.save_mode }}"
+          CUSTOM_NAME="${{ inputs.output_name }}"
+          SPLIT_SIZE_MB="${{ inputs.split_size_mb }}"
+          
+          echo "💾 URL: ${WEBSITE_URL}"
+          echo "📋 Mode: ${SAVE_MODE}"
+          echo "✂️ Split size: ${SPLIT_SIZE_MB} MB"
+          
+          # Generate folder name
+          if [ -z "${CUSTOM_NAME}" ]; then
+            if [ "${SAVE_MODE}" = "file-download" ]; then
+              FILENAME=$(basename "${WEBSITE_URL}")
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              FOLDER_NAME="file_${TIMESTAMP}"
+            else
+              DOMAIN=$(echo "${WEBSITE_URL}" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's|www\.||')
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              FOLDER_NAME="${DOMAIN}_${TIMESTAMP}"
+            fi
+          else
+            FOLDER_NAME="${CUSTOM_NAME}"
+          fi
+          
+          echo "📁 Output folder: ${FOLDER_NAME}"
+          mkdir -p "${FOLDER_NAME}"
+          
+          # Download based on mode
+          if [ "${SAVE_MODE}" = "file-download" ]; then
+            echo "📥 Downloading file..."
+            FILENAME=$(basename "${WEBSITE_URL}")
+            wget \
+              --tries=3 \
+              --timeout=30 \
+              --output-document="${FOLDER_NAME}/${FILENAME}" \
+              "${WEBSITE_URL}" || true
+            
+            if [ ! -f "${FOLDER_NAME}/${FILENAME}" ]; then
+              echo "❌ Download failed"
+              exit 1
+            fi
+            
+          elif [ "${SAVE_MODE}" = "single-page" ]; then
+            echo "📄 Saving single page..."
+            wget \
+              --page-requisites \
+              --convert-links \
+              --adjust-extension \
+              --span-hosts \
+              --no-parent \
+              --no-host-directories \
+              --restrict-file-names=windows \
+              --directory-prefix="${FOLDER_NAME}" \
+              --tries=3 \
+              --timeout=30 \
+              "${WEBSITE_URL}" || true
+          else
+            echo "🌐 Cloning whole website..."
+            wget \
+              --mirror \
+              --convert-links \
+              --adjust-extension \
+              --page-requisites \
+              --no-parent \
+              --no-host-directories \
+              --restrict-file-names=windows \
+              --directory-prefix="${FOLDER_NAME}" \
+              --tries=3 \
+              --timeout=30 \
+              "${WEBSITE_URL}" || true
+          fi
+          
+          # Check if download succeeded
+          if [ ! -d "${FOLDER_NAME}" ] || [ -z "$(ls -A ${FOLDER_NAME})" ]; then
+            echo "❌ Download failed"
+            exit 1
+          fi
+          
+          echo "✅ Saved successfully"
+          echo "${FOLDER_NAME}" > folder_name.txt
+      
+      - name: Create Archive
+        run: |
+          FOLDER_NAME=$(cat folder_name.txt)
+          SPLIT_SIZE_MB="${{ inputs.split_size_mb }}"
+          
+          echo "📦 Creating RAR archive..."
+          
+          # Check if split is needed
+          if [ "${SPLIT_SIZE_MB}" -gt 0 ]; then
+            # Create RAR with split
+            rar a -m5 -v"${SPLIT_SIZE_MB}"m "${FOLDER_NAME}.rar" "${FOLDER_NAME}"
+            
+            # Check if split actually happened
+            if ls "${FOLDER_NAME}".part*.rar 1> /dev/null 2>&1; then
+              echo "✂️ Archive split into parts"
+              echo "split" > split_status.txt
+            else
+              echo "📦 No split needed (file smaller than ${SPLIT_SIZE_MB}MB)"
+              echo "nosplit" > split_status.txt
+            fi
+          else
+            # Create RAR without split
+            rar a -m5 "${FOLDER_NAME}.rar" "${FOLDER_NAME}"
+            echo "📦 Archive created (no split)"
+            echo "nosplit" > split_status.txt
+          fi
+          
+          echo "${FOLDER_NAME}" > rar_name.txt
+      
+      - name: Upload to GitHub
+        run: |
+          FOLDER_NAME=$(cat rar_name.txt)
+          SPLIT_STATUS=$(cat split_status.txt)
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          mkdir -p saved_pages
+          
+          if [ "${SPLIT_STATUS}" = "split" ]; then
+            echo "📤 Uploading split parts..."
+            mv "${FOLDER_NAME}".part*.rar saved_pages/
+            git add saved_pages/"${FOLDER_NAME}".part*.rar
+            git commit -m "📦 Save: ${FOLDER_NAME} (mode: ${{ inputs.save_mode }}, split: ${{ inputs.split_size_mb }}MB)"
+          else
+            echo "📤 Uploading single archive..."
+            mv "${FOLDER_NAME}.rar" saved_pages/
+            git add saved_pages/"${FOLDER_NAME}.rar"
+            git commit -m "📦 Save: ${FOLDER_NAME} (mode: ${{ inputs.save_mode }})"
+          fi
+          
+          git push origin main
+          
+          echo "✅ Upload completed"
