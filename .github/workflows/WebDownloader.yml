@@ -3,8 +3,8 @@ name: Website Saver
 on:
   workflow_dispatch:
     inputs:
-      website_url:
-        description: 'Website URL or File URL'
+      website_urls:
+        description: 'Website URLs or File URLs (comma separated)'
         required: true
         type: string
       
@@ -13,10 +13,10 @@ on:
         required: true
         type: choice
         options:
-          - single-page
+          - multiple-page
           - whole-website
           - file-download
-        default: single-page
+        default: multiple-page
       
       output_name:
         description: 'Output name (optional)'
@@ -45,29 +45,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget rar
       
-      - name: Save Website or Download File
+      - name: Save Websites or Download Files
         run: |
           #!/bin/bash
           
-          WEBSITE_URL="${{ inputs.website_url }}"
+          WEBSITE_URLS="${{ inputs.website_urls }}"
           SAVE_MODE="${{ inputs.save_mode }}"
           CUSTOM_NAME="${{ inputs.output_name }}"
           SPLIT_SIZE_MB="${{ inputs.split_size_mb }}"
           
-          echo "💾 URL: ${WEBSITE_URL}"
+          echo "💾 URLs: ${WEBSITE_URLS}"
           echo "📋 Mode: ${SAVE_MODE}"
           echo "✂️ Split size: ${SPLIT_SIZE_MB} MB"
           
+          # Get the first URL for default folder naming
+          FIRST_URL=$(echo "${WEBSITE_URLS}" | cut -d',' -f1 | xargs)
+          
           # Generate folder name
           if [ -z "${CUSTOM_NAME}" ]; then
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
             if [ "${SAVE_MODE}" = "file-download" ]; then
-              FILENAME=$(basename "${WEBSITE_URL}")
-              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-              FOLDER_NAME="file_${TIMESTAMP}"
+              FOLDER_NAME="files_${TIMESTAMP}"
             else
-              DOMAIN=$(echo "${WEBSITE_URL}" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's|www\.||')
-              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-              FOLDER_NAME="${DOMAIN}_${TIMESTAMP}"
+              DOMAIN=$(echo "${FIRST_URL}" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's|www\.||')
+              FOLDER_NAME="${DOMAIN}_multiple_${TIMESTAMP}"
             fi
           else
             FOLDER_NAME="${CUSTOM_NAME}"
@@ -76,57 +77,68 @@ jobs:
           echo "📁 Output folder: ${FOLDER_NAME}"
           mkdir -p "${FOLDER_NAME}"
           
-          # Download based on mode
-          if [ "${SAVE_MODE}" = "file-download" ]; then
-            echo "📥 Downloading file..."
-            FILENAME=$(basename "${WEBSITE_URL}")
-            wget \
-              --tries=3 \
-              --timeout=30 \
-              --output-document="${FOLDER_NAME}/${FILENAME}" \
-              "${WEBSITE_URL}" || true
+          # Split URLs by comma and loop through them
+          IFS=',' read -ra URL_ARRAY <<< "$WEBSITE_URLS"
+          
+          for URL in "${URL_ARRAY[@]}"; do
+            # Trim whitespace
+            URL=$(echo "$URL" | xargs)
             
-            if [ ! -f "${FOLDER_NAME}/${FILENAME}" ]; then
-              echo "❌ Download failed"
-              exit 1
+            if [ -z "$URL" ]; then
+              continue
             fi
             
-          elif [ "${SAVE_MODE}" = "single-page" ]; then
-            echo "📄 Saving single page..."
-            wget \
-              --page-requisites \
-              --convert-links \
-              --adjust-extension \
-              --span-hosts \
-              --no-parent \
-              --no-host-directories \
-              --restrict-file-names=windows \
-              --directory-prefix="${FOLDER_NAME}" \
-              --tries=3 \
-              --timeout=30 \
-              "${WEBSITE_URL}" || true
-          else
-            echo "🌐 Cloning whole website..."
-            wget \
-              --mirror \
-              --convert-links \
-              --adjust-extension \
-              --page-requisites \
-              --no-parent \
-              --no-host-directories \
-              --restrict-file-names=windows \
-              --directory-prefix="${FOLDER_NAME}" \
-              --tries=3 \
-              --timeout=30 \
-              "${WEBSITE_URL}" || true
-          fi
+            echo "----------------------------------------"
+            echo "⏳ Processing: ${URL}"
+            
+            # Download based on mode
+            if [ "${SAVE_MODE}" = "file-download" ]; then
+              echo "📥 Downloading file..."
+              FILENAME=$(basename "${URL}")
+              wget \
+                --tries=3 \
+                --timeout=30 \
+                --output-document="${FOLDER_NAME}/${FILENAME}" \
+                "${URL}" || echo "⚠️ Warning: Failed to download ${URL}"
+              
+            elif [ "${SAVE_MODE}" = "multiple-page" ]; then
+              echo "📄 Saving page(s)..."
+              wget \
+                --page-requisites \
+                --convert-links \
+                --adjust-extension \
+                --span-hosts \
+                --no-parent \
+                --no-host-directories \
+                --restrict-file-names=windows \
+                --directory-prefix="${FOLDER_NAME}" \
+                --tries=3 \
+                --timeout=30 \
+                "${URL}" || echo "⚠️ Warning: Failed to save ${URL}"
+            else
+              echo "🌐 Cloning whole website..."
+              wget \
+                --mirror \
+                --convert-links \
+                --adjust-extension \
+                --page-requisites \
+                --no-parent \
+                --no-host-directories \
+                --restrict-file-names=windows \
+                --directory-prefix="${FOLDER_NAME}" \
+                --tries=3 \
+                --timeout=30 \
+                "${URL}" || echo "⚠️ Warning: Failed to clone ${URL}"
+            fi
+          done
           
-          # Check if download succeeded
+          # Check if at least one download succeeded
           if [ ! -d "${FOLDER_NAME}" ] || [ -z "$(ls -A ${FOLDER_NAME})" ]; then
-            echo "❌ Download failed"
+            echo "❌ All downloads failed. Folder is empty."
             exit 1
           fi
           
+          echo "----------------------------------------"
           echo "✅ Saved successfully"
           echo "${FOLDER_NAME}" > folder_name.txt
       
