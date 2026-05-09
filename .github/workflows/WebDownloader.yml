@@ -61,7 +61,7 @@ jobs:
           # Get the first URL for default folder naming
           FIRST_URL=$(echo "${WEBSITE_URLS}" | cut -d',' -f1 | xargs)
           
-          # Generate folder name
+          # Generate main folder name
           if [ -z "${CUSTOM_NAME}" ]; then
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
             if [ "${SAVE_MODE}" = "file-download" ]; then
@@ -74,11 +74,12 @@ jobs:
             FOLDER_NAME="${CUSTOM_NAME}"
           fi
           
-          echo "📁 Output folder: ${FOLDER_NAME}"
+          echo "📁 Main output folder: ${FOLDER_NAME}"
           mkdir -p "${FOLDER_NAME}"
           
           # Split URLs by comma and loop through them
           IFS=',' read -ra URL_ARRAY <<< "$WEBSITE_URLS"
+          COUNTER=1
           
           for URL in "${URL_ARRAY[@]}"; do
             # Trim whitespace
@@ -89,7 +90,13 @@ jobs:
             fi
             
             echo "----------------------------------------"
-            echo "⏳ Processing: ${URL}"
+            echo "⏳ Processing [${COUNTER}]: ${URL}"
+            
+            # Generate subfolder for this specific URL
+            URL_DOMAIN=$(echo "${URL}" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's|www\.||')
+            SUB_DIR="${FOLDER_NAME}/${COUNTER}_${URL_DOMAIN}"
+            mkdir -p "${SUB_DIR}"
+            echo "📂 Subfolder: ${SUB_DIR}"
             
             # Download based on mode
             if [ "${SAVE_MODE}" = "file-download" ]; then
@@ -98,7 +105,7 @@ jobs:
               wget \
                 --tries=3 \
                 --timeout=30 \
-                --output-document="${FOLDER_NAME}/${FILENAME}" \
+                --output-document="${SUB_DIR}/${FILENAME}" \
                 "${URL}" || echo "⚠️ Warning: Failed to download ${URL}"
               
             elif [ "${SAVE_MODE}" = "multiple-page" ]; then
@@ -111,7 +118,7 @@ jobs:
                 --no-parent \
                 --no-host-directories \
                 --restrict-file-names=windows \
-                --directory-prefix="${FOLDER_NAME}" \
+                --directory-prefix="${SUB_DIR}" \
                 --tries=3 \
                 --timeout=30 \
                 "${URL}" || echo "⚠️ Warning: Failed to save ${URL}"
@@ -125,11 +132,13 @@ jobs:
                 --no-parent \
                 --no-host-directories \
                 --restrict-file-names=windows \
-                --directory-prefix="${FOLDER_NAME}" \
+                --directory-prefix="${SUB_DIR}" \
                 --tries=3 \
                 --timeout=30 \
                 "${URL}" || echo "⚠️ Warning: Failed to clone ${URL}"
             fi
+            
+            COUNTER=$((COUNTER + 1))
           done
           
           # Check if at least one download succeeded
